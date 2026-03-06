@@ -4,7 +4,8 @@ import argparse
 import logging
 import shutil
 import httpx
-from openai import OpenAI, APIConnectionError
+import markdown
+from openai import OpenAI, APIConnectionError, AuthenticationError
 from dotenv import load_dotenv
 
 # Configure logging
@@ -18,12 +19,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import DOCX generator if available
-try:
-    from docx_generator import create_resume_docx
-    DOCX_AVAILABLE = True
-except ImportError:
-    DOCX_AVAILABLE = False
-    logger.warning("Warning: docx_generator module not found or failed to import. DOCX generation will be disabled.")
+# DOCX functionality removed
+DOCX_AVAILABLE = False
 
 # Load environment variables
 load_dotenv()
@@ -47,7 +44,7 @@ def check_disk_space(path, min_free_bytes=10 * 1024 * 1024):
         logger.warning(f"Could not check disk space: {e}")
         return True # Assume space is ok if check fails
 
-def generate_resume_content(api_key, base_url, model_name, language, target_position, user_info, proxy=None):
+def generate_resume_content(api_key, base_url, model_name, language, target_position, user_info, avatar_path, proxy=None):
     """
     Call OpenAI API (or compatible interface) to generate resume content.
     """
@@ -62,28 +59,27 @@ def generate_resume_content(api_key, base_url, model_name, language, target_posi
         http_client=http_client
     )
 
-    system_prompt = """
+    system_prompt = f"""
 你是资深招聘专家(10+年经验)。
 你浏览过数千份简历，深知ATS系统如何运作。
 
-使用以下信息创建简历：
-- ATS兼容
-- 吸引人眼球
-- 清晰、可量化的成就导向
-- 不超过1-2页
-- 现代专业
+使用以下信息创建简历，并严格遵守以下 Markdown 排版规范：
 
-规则：
-- 从强势'职业总结'开始
-- 每段工作用数字成果(百分比、金额、时间、增长)
-- 避免不必要的陈词滥调
-- 使用主动动词
-- 写得让招聘者6秒内注意到
-- 自然融入关键词
-- 不用表格、图标、图形
-- 输出格式为 Markdown，方便阅读和转换
-- 第一行必须是 '# 姓名 - 职位' 格式
-- 第二行必须是联系方式（电话、邮箱、地址等）
+### 1. 结构与排版规则：
+- **头像展示**：在文档最顶部插入以下 HTML 代码以显示头像：
+  `<div align="center"><img src="{avatar_path}" width="120" height="120" style="border-radius: 50%; object-fit: cover; margin-bottom: 20px;"></div>`
+- **标题层级**：第一行必须是 `# 姓名`。二级标题使用 `## 模块名`（如：## 职业总结, ## 工作经历）。确保标题前后有空行。
+- **联系方式**：姓名下方紧跟联系方式（电话 | 邮箱 | 地址 | 链接），使用居中排版：`<div align="center">电话 | 邮箱 | 链接</div>`。
+- **列表规范**：使用 `- ` 进行无序列表排版。确保列表项缩进一致，每项内容简洁有力。
+- **强调样式**：关键词或重要成就使用 **粗体**。
+- **间距控制**：各主要模块（##）之间保持两行空行，段落之间保持一行空行。
+- **表格与代码**：如涉及技术栈，可使用 `代码块` 形式；如涉及对比数据，可使用 Markdown 表格。
+- **成就导向**：每段工作必须包含数字成果（百分比、金额、时间、增长）。
+
+### 2. 内容要求：
+- ATS 兼容，现代专业，不超过 1-2 页。
+- 使用主动动词，避免陈词滥调。
+- 自然融入目标职位关键词。
 """
 
     user_prompt = f"""
@@ -107,6 +103,12 @@ def generate_resume_content(api_key, base_url, model_name, language, target_posi
             temperature=0.7
         )
         return response.choices[0].message.content
+    except AuthenticationError as e:
+        logger.error(f"身份验证失败 (401 Unauthorized): {e}")
+        logger.error("请检查您的 API Key 是否正确。")
+        logger.error("1. 确保没有多余的空格。")
+        logger.error("2. 确保 API Key 与 Base URL 匹配 (例如 DeepSeek 的 Key 不能用于 Moonshot)。")
+        return f"Error: Authentication failed. {str(e)}"
     except APIConnectionError as e:
         logger.error(f"连接 API 失败: {e}")
         logger.error("请检查网络连接、Base URL 配置或是否需要设置代理 (Proxy)。")
@@ -140,7 +142,6 @@ def main():
     logger.info(f"默认输出目录: {desktop_path}")
     
     default_md_path = os.path.join(desktop_path, "generated_resume.md")
-    default_docx_path = os.path.join(desktop_path, "generated_resume.docx")
 
     parser = argparse.ArgumentParser(description="AI 简历生成器")
     parser.add_argument("--api_key", help="OpenAI API Key (如果未在环境变量设置)")
@@ -150,9 +151,8 @@ def main():
     parser.add_argument("--position", help="目标职位")
     parser.add_argument("--info_file", help="包含用户信息的文本文件路径")
     parser.add_argument("--output_md", default=default_md_path, help=f"Markdown 输出路径 (默认: {default_md_path})")
-    parser.add_argument("--output_docx", default=default_docx_path, help=f"DOCX 输出路径 (默认: {default_docx_path})")
     parser.add_argument("--proxy", help="HTTP/HTTPS 代理地址 (例如: http://127.0.0.1:7890)")
-    parser.add_argument("--no_docx", action="store_true", help="跳过 DOCX 生成")
+    parser.add_argument("--avatar", default="https://via.placeholder.com/120", help="头像 URL 或本地路径 (默认: 占位图)")
     
     args = parser.parse_args()
 
@@ -226,7 +226,7 @@ def main():
 
     # 3. Generate Resume
     print("\n正在生成简历，请稍候...")
-    resume_content = generate_resume_content(api_key, base_url, model_name, language, target_position, user_info, proxy=proxy)
+    resume_content = generate_resume_content(api_key, base_url, model_name, language, target_position, user_info, args.avatar, proxy=proxy)
 
     if resume_content.startswith("Error"):
         logger.error(resume_content)
@@ -260,29 +260,135 @@ def main():
         with open(output_md, "w", encoding="utf-8") as f:
             f.write(resume_content)
         logger.info(f"简历 Markdown 已保存至: {output_md}")
+        
+        # 6. Generate HTML with Print Styles
+        output_html = output_md.replace('.md', '.html')
+        html_content = markdown.markdown(resume_content, extensions=['tables', 'fenced_code'])
+        
+        # Enhanced CSS for Print
+        full_html = f"""
+<!DOCTYPE html>
+<html lang="{language}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resume - {target_position}</title>
+    <style>
+    /* Reset & Base */
+    body {{
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Microsoft YaHei", sans-serif;
+        line-height: 1.6;
+        color: #333;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 40px;
+        background: #fff;
+    }}
+    
+    /* Typography */
+    h1 {{
+        font-size: 2.4em;
+        text-align: center;
+        color: #2c3e50;
+        margin-bottom: 0.5em;
+        line-height: 1.2;
+    }}
+    h2 {{
+        font-size: 1.5em;
+        color: #34495e;
+        border-bottom: 2px solid #eaecef;
+        padding-bottom: 0.3em;
+        margin-top: 2em;
+        margin-bottom: 1em;
+        page-break-after: avoid; /* Prevent headings from being orphaned */
+    }}
+    h3 {{
+        font-size: 1.2em;
+        color: #455a64;
+        margin-top: 1.2em;
+        page-break-after: avoid;
+    }}
+    p {{
+        margin-bottom: 1em;
+    }}
+    
+    /* Components */
+    ul {{
+        padding-left: 20px;
+        margin-bottom: 1em;
+    }}
+    li {{
+        margin-bottom: 0.5em;
+    }}
+    code {{
+        background-color: #f6f8fa;
+        padding: 0.2em 0.4em;
+        border-radius: 3px;
+        font-family: Consolas, "Courier New", monospace;
+        color: #e83e8c;
+        -webkit-print-color-adjust: exact; /* Force print background */
+        print-color-adjust: exact;
+    }}
+    table {{
+        border-collapse: collapse;
+        width: 100%;
+        margin: 1.5em 0;
+        page-break-inside: avoid; /* Prevent table break */
+    }}
+    th, td {{
+        border: 1px solid #dfe2e5;
+        padding: 0.8em 1em;
+    }}
+    th {{
+        background-color: #f6f8fa;
+        font-weight: 600;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }}
+    img {{
+        max-width: 100%;
+        display: block;
+        margin: 0 auto;
+    }}
+    
+    /* Print Specifics */
+    @media print {{
+        body {{
+            max-width: 100%;
+            padding: 0;
+            margin: 0;
+        }}
+        @page {{
+            margin: 1.5cm; /* Standard margin */
+            size: A4 portrait;
+        }}
+        h2 {{
+            margin-top: 1.5em; /* Reduce spacing for print */
+        }}
+        a {{
+            text-decoration: none;
+            color: #000;
+        }}
+        /* Ensure background colors are printed */
+        * {{
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }}
+    }}
+    </style>
+</head>
+<body>
+{html_content}
+</body>
+</html>
+"""
+        with open(output_html, "w", encoding="utf-8") as f:
+            f.write(full_html)
+        logger.info(f"简历 HTML 已保存至: {output_html} (推荐使用浏览器打开并打印为 PDF)")
+        
     except Exception as e:
-        logger.error(f"保存 Markdown 文件失败: {e}")
+        logger.error(f"保存文件失败: {e}")
         return
-
-    # 5. Generate DOCX
-    if not args.no_docx and DOCX_AVAILABLE:
-        output_docx = os.path.abspath(args.output_docx)
-        docx_dir = os.path.dirname(output_docx)
-        
-        print(f"正在生成 DOCX: {output_docx}...")
-        
-        try:
-            # Ensure directory exists
-            if docx_dir and not os.path.exists(docx_dir):
-                os.makedirs(docx_dir, exist_ok=True)
-            
-            success = create_resume_docx(resume_content, output_docx)
-            if success:
-                logger.info(f"DOCX 生成成功: {output_docx}")
-            else:
-                logger.error("DOCX 生成失败。请检查日志。")
-        except Exception as e:
-            logger.error(f"DOCX 生成过程发生异常: {e}")
 
     print("-" * 30)
     logger.info("任务完成！")
