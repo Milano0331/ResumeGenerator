@@ -44,7 +44,7 @@ python generate_resume.py
    - 输入 `END` 并回车结束输入
 
 ## 输出
-程序将在当前目录下生成 `generated_resume.md` 文件，包含排版好的简历内容。
+程序将在桌面生成DOCX文件，包含排版好的简历内容。
 
 ## 示例输入
 **目标职位**: 产品经理
